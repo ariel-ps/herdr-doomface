@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""herdr-doomface <pane-id> — draw the classic Doom status-bar face in a
+pane's corner, picking the frame from how much of that Claude session's
+context window is used up. Runs until the pane closes or its occupant stops
+being a Claude agent, then clears its own overlay and exits.
+
+Not invoked directly in normal use — doomface-hook.sh spawns one of these per
+Claude pane on its first pane.agent_status_changed event and tracks it by
+pidfile so the hook (which fires on every status change, not just the first)
+never starts a second one for the same pane.
+
+Draws over the socket (pane.graphics.set / .clear), the same primitive
+alert-hook.sh uses for its flash — composited above the pane's cells, so it
+survives a full-screen agent repainting its own background. No Herdr-side
+event exists for token usage, so this polls: token counts live in the
+session's own transcript JSONL (usage.input_tokens plus the two cache
+fields), not in anything Herdr's socket API reports.
+
+Also reports $doomface (an emoji standing in for the same frame) and
+$doomface_pct through `herdr pane report-metadata`, because the corner sprite
+only exists inside this one pane's cells — Herdr's sidebar is the other place
+a face this loop draws might actually want to be seen, and that surface is
+text tokens, not bitmaps. Reporting the token is necessary but not
+sufficient: a row still has to name $doomface, which is local sidebar config
+the user opts into (see README).
+
+For the actual sprite somewhere other than this one pane's corner — a
+persistent, full-size, standalone widget — see herdr-doomface-widget instead,
+which draws directly into its own dedicated pane rather than compositing into
+someone else's.
+
+Env:
+  HERDR_DOOMFACE_INTERVAL=4   seconds between polls
+  HERDR_DOOMFACE_COLS=8       overlay width, in the pane's own cell grid
+  HERDR_DOOMFACE_ROWS=5       overlay height, in cells
+  HERDR_DOOMFACE_CORNER=tr    tl | tr | bl | br
+  HERDR_DOOMFACE_Z=5          layer z-index (alert-hook's flash uses 9)
+"""
+
+import base64
+import json
+import os
+import signal
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _doomface_core import (  # noqa: E402
+    FRAME_DEAD, FRAME_FOR_BAND, FRAME_GOD,
+    herdr_pane_get, load_frame_bytes, load_manifest, pick_frame,
+    remaining_pct_for_pane,
+)
+
+LAYER_ID = "doomface"
+
+# The sidebar has no bitmap layer (see docs/versions/0.9.0 configuration.mdx,
+# "Sidebar row layouts" — rows are text tokens with optional fg/bold/dim, not
+# images), so a $doomface token gets an emoji stand-in for whichever frame the
+# corner sprite is showing, band for band.
+EMOJI_FOR_BAND = ["\U0001F60A", "\U0001F610", "\U0001F61F", "\U0001F630", "\U0001F975"]
+EMOJI_DEAD = "\U0001F480"
+EMOJI_GOD = "\U0001F607"
+EMOJI_FOR_FRAME = dict(zip(FRAME_FOR_BAND, EMOJI_FOR_BAND))
+EMOJI_FOR_FRAME[FRAME_DEAD] = EMOJI_DEAD
+EMOJI_FOR_FRAME[FRAME_GOD] = EMOJI_GOD
+METADATA_SOURCE = "dev.ariel.herdr-doomface:doomface"
+
+
+def plugin_enabled():
+    registry = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "herdr/plugins.json"
+    try:
+        return any(p["plugin_id"] == "dev.ariel.herdr-doomface" and p.get("enabled")
+                   for p in json.loads(registry.read_text()))
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
+def pane_rect(pane_id):
+    """This pane's own {width, height} in cells, from its tab's layout. None
+    if the pane can't be found there (closed mid-lookup, or an API shape this
+    doesn't recognize) — callers fall back to the top-left corner."""
+    try:
+        proc = subprocess.run(
+            ["herdr", "pane", "layout", "--pane", pane_id],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        panes = json.loads(proc.stdout)["result"]["layout"]["panes"]
+        for p in panes:
+            if p.get("pane_id") == pane_id:
+                rect = p["rect"]
+                return rect["width"], rect["height"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    return None
+
+
+def corner_offset(pane_id, corner, cols, rows):
+    rect = pane_rect(pane_id)
+    width, height = rect if rect else (cols, rows)
+    col = max(0, width - cols) if corner in ("tr", "br") else 0
+    row = max(0, height - rows) if corner in ("bl", "br") else 0
+    return col, row
+
+
+def herdr_socket_path():
+    return os.environ.get("HERDR_SOCKET_PATH") or str(
+        Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+        / "herdr" / "herdr.sock"
+    )
+
+
+def rpc(method, params):
+    req = json.dumps({"id": "doomface", "method": method, "params": params}) + "\n"
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(2)
+            s.connect(herdr_socket_path())
+            s.sendall(req.encode())
+            try:
+                s.recv(4096)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def draw(pane_id, name, manifest, col, row, cols, rows, z):
+    info = manifest[name]
+    data = load_frame_bytes(name)
+    if not data:
+        return
+    rpc("pane.graphics.set", {
+        "pane_id": pane_id,
+        "format": "rgba",
+        "image_width": info["width"],
+        "image_height": info["height"],
+        "data_base64": base64.b64encode(data).decode("ascii"),
+        "layer_id": LAYER_ID,
+        "z_index": z,
+        "placement": {
+            "viewport_col": col, "viewport_row": row,
+            "grid_cols": cols, "grid_rows": rows,
+        },
+    })
+
+
+def clear(pane_id):
+    rpc("pane.graphics.clear", {"pane_id": pane_id, "layer_id": LAYER_ID})
+
+
+def report_tokens(pane_id, emoji, remaining_pct):
+    # Text-only, for the sidebar rather than the pane's own cells — see
+    # docs/versions/0.9.0 configuration.mdx, "Custom $name tokens are dynamic
+    # values, not literal text." A row still has to name $doomface itself in
+    # the user's own config.toml; reporting the value doesn't place it.
+    try:
+        subprocess.run(
+            ["herdr", "pane", "report-metadata", pane_id,
+             "--source", METADATA_SOURCE,
+             "--token", f"doomface={emoji}",
+             "--token", f"doomface_pct={round(remaining_pct * 100)}"],
+            capture_output=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def clear_tokens(pane_id):
+    try:
+        subprocess.run(
+            ["herdr", "pane", "report-metadata", pane_id,
+             "--source", METADATA_SOURCE,
+             "--clear-token", "doomface",
+             "--clear-token", "doomface_pct"],
+            capture_output=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print("usage: herdr-doomface <pane-id>", file=sys.stderr)
+        return 2
+    pane_id = sys.argv[1]
+
+    manifest = load_manifest()
+    if not manifest:
+        return 0  # no synced frames — nothing to draw, nothing to clear
+
+    interval = float(os.environ.get("HERDR_DOOMFACE_INTERVAL", "4"))
+    cols = int(os.environ.get("HERDR_DOOMFACE_COLS", "8"))
+    rows = int(os.environ.get("HERDR_DOOMFACE_ROWS", "5"))
+    corner = os.environ.get("HERDR_DOOMFACE_CORNER", "tr")
+    z = int(os.environ.get("HERDR_DOOMFACE_Z", "5"))
+
+    signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(0))
+
+    col, row = corner_offset(pane_id, corner, cols, rows)
+    last_drawn = None
+
+    try:
+        while plugin_enabled():
+            pane = herdr_pane_get(pane_id)
+            if pane is None or pane.get("agent") != "claude":
+                break
+
+            try:
+                remaining = remaining_pct_for_pane(pane)
+                if remaining is not None:
+                    frame = pick_frame(remaining)
+                    if frame != last_drawn and frame in manifest:
+                        draw(pane_id, frame, manifest, col, row, cols, rows, z)
+                        report_tokens(pane_id, EMOJI_FOR_FRAME[frame], remaining)
+                        last_drawn = frame
+            except Exception:
+                pass  # a bad poll costs one tick, not the loop
+
+            time.sleep(interval)
+    finally:
+        clear(pane_id)
+        clear_tokens(pane_id)
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

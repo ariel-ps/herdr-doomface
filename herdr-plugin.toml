@@ -1,0 +1,30 @@
+id = "dev.ariel.herdr-doomface"
+name = "Doom Indicators"
+version = "0.1.0"
+min_herdr_version = "0.9.3"
+description = "Claude context usage as a face overlay or widget."
+platforms = ["macos", "linux"]
+
+[[build]]
+command = ["sh","-c","if command -v uv >/dev/null 2>&1; then uv run --no-project python scripts/fetch-doom-wad.py; else python3 scripts/fetch-doom-wad.py; fi || echo 'doomface: no frames cached, corner face stays off'"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["zsh","./doomface-hook.sh"]
+
+[[actions]]
+id = "doomface-stop-all"
+title = "Stop all doom faces"
+command = ["zsh","./doomface-hook.sh","--stop-all"]
+
+[[actions]]
+id = "doomface-widget"
+title = "Open Doom face widget"
+command = ["zsh","./doomface-widget-action.sh"]
+
+[[panes]]
+id = "doomface-widget"
+title = "Doom Face"
+platforms = ["macos","linux"]
+placement = "split"
+command = ["sh","-c","if command -v uv >/dev/null 2>&1; then exec uv run --no-project python ./bin/herdr-doomface-widget; else exec python3 ./bin/herdr-doomface-widget; fi"]

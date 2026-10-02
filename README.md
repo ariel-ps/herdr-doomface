@@ -2,7 +2,7 @@
 
 Show Claude's context usage as a Doom face overlay or a separate widget.
 
-The build downloads face assets. The overlay stops when the plugin is disabled (within its polling interval). Existing widget panes can be closed normally. Configure overlay position and size in `config.sh`.
+The build downloads face assets. The overlay stops when the plugin is disabled (within its polling interval). Existing widget panes can be closed normally. Configure overlay position and size in `config.sh`. Transcript lookup respects `CLAUDE_CONFIG_DIR`.
 
 ## Install
 
@@ -18,6 +18,14 @@ Use a commit or release tag instead of `main` to pin a version. Supports macOS a
 
 
 Edit `config.sh` in the directory printed by `herdr plugin config-dir dev.ariel.herdr-doomface`. Existing media caches are reused.
+
+To request that current overlay workers stop:
+
+```sh
+herdr plugin action invoke doomface-stop-all --plugin dev.ariel.herdr-doomface
+```
+
+Workers exit at the next poll (normally 4 seconds apart). New agent events can start them again; disable the plugin to keep overlays off. Workers use kernel locks and stop requests, so stale PID files cannot cause an unrelated process to be terminated. Workers started by older versions exit when their pane closes or the plugin is disabled.
 
 ## License
 

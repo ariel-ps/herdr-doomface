@@ -5,9 +5,8 @@ context window is used up. Runs until the pane closes or its occupant stops
 being a Claude agent, then clears its own overlay and exits.
 
 Not invoked directly in normal use — doomface-hook.sh spawns one of these per
-Claude pane on its first pane.agent_status_changed event and tracks it by
-pidfile so the hook (which fires on every status change, not just the first)
-never starts a second one for the same pane.
+Claude pane on a pane.agent_status_changed event. A kernel file lock ensures
+only one worker can draw for that pane, including after a crash.
 
 Draws over the socket (pane.graphics.set / .clear), the same primitive
 alert-hook.sh uses for its flash — composited above the pane's cells, so it
@@ -38,8 +37,10 @@ Env:
 """
 
 import base64
+import fcntl
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -186,12 +187,7 @@ def clear_tokens(pane_id):
         pass
 
 
-def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: herdr-doomface <pane-id>", file=sys.stderr)
-        return 2
-    pane_id = sys.argv[1]
-
+def run(pane_id, stop_file) -> int:
     manifest = load_manifest()
     if not manifest:
         return 0  # no synced frames — nothing to draw, nothing to clear
@@ -206,9 +202,10 @@ def main() -> int:
 
     col, row = corner_offset(pane_id, corner, cols, rows)
     last_drawn = None
+    last_reported = None
 
     try:
-        while plugin_enabled():
+        while not stop_file.exists() and plugin_enabled():
             pane = herdr_pane_get(pane_id)
             if pane is None or pane.get("agent") != "claude":
                 break
@@ -219,8 +216,11 @@ def main() -> int:
                     frame = pick_frame(remaining)
                     if frame != last_drawn and frame in manifest:
                         draw(pane_id, frame, manifest, col, row, cols, rows, z)
-                        report_tokens(pane_id, EMOJI_FOR_FRAME[frame], remaining)
                         last_drawn = frame
+                    reported = (frame, round(remaining * 100))
+                    if reported != last_reported:
+                        report_tokens(pane_id, EMOJI_FOR_FRAME[frame], remaining)
+                        last_reported = reported
             except Exception:
                 pass  # a bad poll costs one tick, not the loop
 
@@ -230,6 +230,46 @@ def main() -> int:
         clear_tokens(pane_id)
 
     return 0
+
+
+def worker_directory():
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "herdr-kit/doomface/workers"
+
+
+def stop_all():
+    requested = 0
+    for path in worker_directory().glob('*.lock'):
+        with path.open('a') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                path.with_suffix('.stop').touch()
+                requested += 1
+    print(f'doomface: requested stop for {requested} workers (at the next poll)')
+    return 0
+
+
+def main() -> int:
+    if sys.argv[1:] == ['--stop-all']:
+        return stop_all()
+    if len(sys.argv) != 2 or not re.fullmatch(r'[A-Za-z0-9:_-]+', sys.argv[1]):
+        print('usage: herdr-doomface <pane-id> | --stop-all', file=sys.stderr)
+        return 2
+    pane_id = sys.argv[1]
+    directory = worker_directory()
+    directory.mkdir(parents=True, exist_ok=True)
+    # Keep the lock inode: unlinking it would let a new worker bypass a holder.
+    with (directory / f'{pane_id}.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return 0
+        stop_file = directory / f'{pane_id}.stop'
+        stop_file.unlink(missing_ok=True)
+        try:
+            return run(pane_id, stop_file)
+        finally:
+            stop_file.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

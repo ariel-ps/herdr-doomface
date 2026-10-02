@@ -73,7 +73,8 @@ def transcript_path(cwd, session_id):
     # and '.' replaced by '-'. Verified directly against a live transcript
     # path rather than assumed.
     slug = "".join("-" if c in "/." else c for c in cwd)
-    return Path.home() / ".claude" / "projects" / slug / f"{session_id}.jsonl"
+    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    return base / "projects" / slug / f"{session_id}.jsonl"
 
 
 def last_usage(path):

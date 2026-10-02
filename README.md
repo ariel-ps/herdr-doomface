@@ -18,3 +18,7 @@ Use a commit or release tag instead of `main` to pin a version. Supports macOS a
 
 
 Edit `config.sh` in the directory printed by `herdr plugin config-dir dev.ariel.herdr-doomface`. Existing media caches are reused.
+
+## License
+
+Original project code is licensed under the [MIT License](LICENSE). Third-party code and media retain their own terms; this license does not grant rights to game assets, downloaded themes, or other third-party content.

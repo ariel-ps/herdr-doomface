@@ -1,8 +1,8 @@
 # Herdr Doomface
 
-Show Claude's context usage as a Doom face overlay or a separate widget.
+Show Claude's context usage as sidebar metadata or a separate bitmap widget.
 
-The build downloads face assets into the existing XDG cache location. The overlay stops when the plugin is disabled (within its polling interval). Existing widget panes can be closed normally. Configure overlay position and size in `config.sh`. Transcript lookup respects `CLAUDE_CONFIG_DIR`.
+The automatic reporter publishes a face and remaining-context percentage for sidebar layouts. The opt-in widget writes standard Kitty graphics from its own split pane, which is the graphics path supported by Herdr 0.9.3. The build downloads widget assets into the existing XDG cache location. Transcript lookup respects `CLAUDE_CONFIG_DIR`.
 
 ## Install
 
@@ -16,16 +16,29 @@ herdr plugin install ariel-ps/herdr-doomface --ref main --yes
 
 Use a commit or release tag instead of `main` to pin a version. Supports macOS and Ubuntu/Debian Linux.
 
+Add the custom tokens to the Claude sidebar rows where you want them displayed:
 
-Edit `config.sh` in the directory printed by `herdr plugin config-dir dev.ariel.herdr-doomface`. Existing media caches are reused.
+```toml
+[ui.sidebar.agents.rows_by_agent]
+claude = [
+  ["state_icon", "machine", "workspace", "tab"],
+  ["agent", "$doomface", "$doomface_pct"],
+]
+```
 
-To request that current overlay workers stop:
+Edit `config.sh` in the directory printed by `herdr plugin config-dir dev.ariel.herdr-doomface`. Existing media caches are reused. Open the bitmap widget with:
+
+```sh
+herdr plugin action invoke doomface-widget --plugin dev.ariel.herdr-doomface
+```
+
+To request that current metadata reporters stop:
 
 ```sh
 herdr plugin action invoke doomface-stop-all --plugin dev.ariel.herdr-doomface
 ```
 
-Workers exit at the next poll (normally 4 seconds apart). New agent events can start them again; disable the plugin to keep overlays off. Workers use kernel locks and stop requests, so stale PID files cannot cause an unrelated process to be terminated. Workers started by older versions exit when their pane closes or the plugin is disabled.
+Reporters exit at the next poll (normally 4 seconds apart). New agent events can start them again; disable the plugin to keep reporting off. Reporters use kernel locks and stop requests, so stale PID files cannot cause an unrelated process to be terminated. Existing widget panes can be closed normally.
 
 ## Development
 

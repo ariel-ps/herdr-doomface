@@ -8,4 +8,4 @@ if command -v uv >/dev/null 2>&1; then
   uv run --no-project python "$fetcher"
 else
   python3 "$fetcher"
-fi || echo "doomface: no frames cached, corner face stays off"
+fi || echo "doomface: no frames cached, bitmap widget stays off"

@@ -1,10 +1,13 @@
 """Run directly: python3 tests/test_plugin.py."""
+import base64
 from contextlib import ExitStack
 import importlib.util
+import io
 import json
 import os
 import select
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -16,6 +19,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from herdr_doomface import core  # noqa: E402
+from herdr_doomface import widget  # noqa: E402
 from herdr_doomface import worker as doomface  # noqa: E402
 
 FETCHER_SPEC = importlib.util.spec_from_file_location(
@@ -99,51 +103,23 @@ def check_metadata() -> None:
     real_report_tokens = doomface.report_tokens
     real_clear_tokens = doomface.clear_tokens
 
-    class FragmentedSocket:
-        def __init__(self) -> None:
-            self.chunks = [b'{"res', b'ult":{}}\n']
-
-        def __enter__(self) -> 'FragmentedSocket':
-            return self
-
-        def __exit__(
-            self,
-            _exc_type: object,
-            _exc: object,
-            _traceback: object,
-        ) -> None:
-            return None
-
-        def settimeout(self, _timeout: int) -> None:
-            return None
-
-        def connect(self, _path: str) -> None:
-            return None
-
-        def sendall(self, request: bytes) -> None:
-            assert request.endswith(b'\n')
-
-        def recv(self, _size: int) -> bytes:
-            return self.chunks.pop(0) if self.chunks else b''
-
     with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
-        stack.enter_context(patch.object(doomface, 'load_manifest', return_value={'STFST00': {}}))
+        stack.enter_context(patch.dict(os.environ, {'HERDR_DOOMFACE_INTERVAL': '4'}))
         stack.enter_context(patch.object(doomface, 'plugin_enabled', side_effect=[True, True, True, False]))
-        stack.enter_context(patch.object(doomface, 'herdr_pane_get', return_value={'agent': 'claude'}))
-        stack.enter_context(patch.object(doomface, 'remaining_pct_for_pane', side_effect=[0.91, 0.90, 0.90]))
-        stack.enter_context(patch.object(doomface, 'corner_offset', return_value=(0, 0)))
+        pane_get = stack.enter_context(
+            patch.object(doomface, 'herdr_pane_get', return_value={'agent': 'claude'}),
+        )
+        stack.enter_context(patch.object(doomface, 'remaining_pct_for_pane', side_effect=[0.91, None, 0.90]))
         stack.enter_context(patch.object(doomface.time, 'sleep'))
-        stack.enter_context(patch.object(doomface.signal, 'signal'))
-        draw = stack.enter_context(patch.object(doomface, 'draw'))
-        draw.side_effect = [False, True]
+        signal_signal = stack.enter_context(patch.object(doomface.signal, 'signal'))
         report = stack.enter_context(patch.object(doomface, 'report_tokens'))
         report.side_effect = [False, True]
-        clear = stack.enter_context(patch.object(doomface, 'clear'))
-        stack.enter_context(patch.object(doomface, 'clear_tokens'))
+        clear_tokens = stack.enter_context(patch.object(doomface, 'clear_tokens'))
         assert doomface.run('w1:p1', Path(temporary) / 'stop') == 0
-        assert draw.call_count == 2
         assert [call.args[2] for call in report.call_args_list] == [0.91, 0.90]
-        clear.assert_called_once_with('w1:p1')
+        assert [call.args[3] for call in report.call_args_list] == [12000, 12000]
+        assert [call.args for call in clear_tokens.call_args_list] == [('w1:p1',), ('w1:p1',)]
+        assert 'pane.graphics.' not in Path(doomface.__file__).read_text()
         stack.enter_context(patch.dict(os.environ, {'CLAUDE_CONFIG_DIR': temporary}))
         assert core.transcript_path('/project/name', 'session') == (
             Path(temporary) / 'projects/-project-name/session.jsonl'
@@ -165,12 +141,55 @@ def check_metadata() -> None:
             herdr_run.return_value.returncode = 0
             herdr_run.return_value.stdout = '{"result":{"pane":{}}}'
             assert core.herdr_pane_get('w1:p1') == {}
-            assert doomface.pane_rect('w1:p1') is None
-            assert real_report_tokens('w1:p1', 'face', 0.5)
+            assert real_report_tokens('w1:p1', 'face', 0.5, 15000)
             assert real_clear_tokens('w1:p1')
             assert all(call.args[0][0] == '/custom/herdr' for call in herdr_run.call_args_list)
-        with patch.object(doomface.socket, 'socket', return_value=FragmentedSocket()):
-            assert doomface.rpc('test', {})
+            assert '--ttl-ms' in herdr_run.call_args_list[-2].args[0]
+
+        pane_get.side_effect = RuntimeError('pane lookup failed')
+        doomface.plugin_enabled.side_effect = [True]
+        clear_tokens.reset_mock()
+        try:
+            doomface.run('w1:p1', Path(temporary) / 'stop')
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError('Worker swallowed a pane lookup failure')
+        clear_tokens.assert_called_once_with('w1:p1')
+
+        pane_get.side_effect = lambda _pane_id: signal_signal.call_args.args[1](
+            signal.SIGTERM,
+            None,
+        )
+        doomface.plugin_enabled.side_effect = [True]
+        clear_tokens.reset_mock()
+        try:
+            doomface.run('w1:p1', Path(temporary) / 'stop')
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError('Worker ignored SIGTERM')
+        clear_tokens.assert_called_once_with('w1:p1')
+
+
+def check_widget_protocol() -> None:
+    data = bytes(range(256)) * 16
+    output = io.StringIO()
+    with patch.object(widget.sys, 'stdout', output):
+        widget.send_image(data, 1024, 1)
+        widget.clear_image()
+    rendered = output.getvalue()
+    packets = [
+        packet.split('\033\\', 1)[0]
+        for packet in rendered.split('\033_G')[1:]
+    ]
+    transfers = [packet for packet in packets if ';' in packet]
+    assert len(transfers) == 2
+    assert 's=1024,v=1' in transfers[0]
+    assert ',m=1;' in transfers[0]
+    assert transfers[-1].split(';', 1)[0] == 'q=2,m=0'
+    assert base64.b64decode(''.join(packet.split(';', 1)[1] for packet in transfers)) == data
+    assert rendered.count(f'a=d,d=I,i={widget.IMAGE_ID},q=2') == 2
 
 
 def check_layout_contract() -> None:
@@ -330,7 +349,7 @@ def check_relocated_entrypoints() -> None:
             cwd=temporary, env=build_env, text=True, capture_output=True, timeout=20,
         )
         assert build.returncode == 0, build
-        assert 'no frames cached, corner face stays off' in build.stdout
+        assert 'no frames cached, bitmap widget stays off' in build.stdout
         actual_uv_args = uv_args.read_text().splitlines()
         expected_uv_args = [
             'run',
@@ -362,6 +381,9 @@ class DoomfacePluginTests(unittest.TestCase):
 
     def test_metadata_updates(self) -> None:
         check_metadata()
+
+    def test_widget_uses_kitty_graphics(self) -> None:
+        check_widget_protocol()
 
     def test_layout_contract(self) -> None:
         check_layout_contract()

@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+root=${HERDR_PLUGIN_ROOT:-$(dirname -- "$script_dir")}
+PYTHONPATH="$root/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
+
+if command -v uv >/dev/null 2>&1; then
+  exec uv run --no-project python -m herdr_doomface.widget "$@"
+fi
+exec python3 -m herdr_doomface.widget "$@"

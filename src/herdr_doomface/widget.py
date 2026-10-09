@@ -101,8 +101,13 @@ def main() -> int:
     try:
         while not stop:
             pane = herdr_pane_get(target)
-            if pane is None or pane.get("agent") != "claude":
+            if pane is None:
                 show_message(f"doomface: {target} is gone")
+                break
+            if pane.get("agent") != "claude":
+                show_message("doomface: select a Claude pane before opening this widget")
+                while not stop:
+                    time.sleep(0.1)
                 break
 
             remaining = remaining_pct_for_pane(pane)

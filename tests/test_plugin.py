@@ -191,6 +191,25 @@ def check_widget_protocol() -> None:
     assert base64.b64decode(''.join(packet.split(';', 1)[1] for packet in transfers)) == data
     assert rendered.count(f'a=d,d=I,i={widget.IMAGE_ID},q=2') == 2
 
+    handlers = {}
+    with (
+        patch.dict(os.environ, {'HERDR_DOOMFACE_TARGET': 'w1:p1'}),
+        patch.object(widget, 'load_manifest', return_value={'STFST00': {}}),
+        patch.object(widget, 'herdr_pane_get', return_value={'agent': 'cursor'}),
+        patch.object(widget, 'show_message') as show_message,
+        patch.object(widget, 'clear_image') as clear_image,
+        patch.object(widget.signal, 'signal', side_effect=lambda signum, handler: handlers.setdefault(signum, handler)),
+        patch.object(
+            widget.time,
+            'sleep',
+            side_effect=lambda _interval: handlers[signal.SIGTERM](signal.SIGTERM, None),
+        ) as wait,
+    ):
+        assert widget.main() == 0
+    show_message.assert_called_once_with('doomface: select a Claude pane before opening this widget')
+    wait.assert_called_once_with(0.1)
+    clear_image.assert_called_once()
+
 
 def check_layout_contract() -> None:
     manifest = tomllib.loads((ROOT / 'herdr-plugin.toml').read_text())

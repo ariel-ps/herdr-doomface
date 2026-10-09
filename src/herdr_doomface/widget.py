@@ -1,5 +1,7 @@
 """Render Doomface full-size in a dedicated Herdr split pane."""
 
+from __future__ import annotations
+
 import base64
 import os
 import signal
@@ -57,7 +59,7 @@ def send_image(data: bytes, width: int, height: int) -> None:
     out = [f"{ESC}_Ga=d,d=I,i={IMAGE_ID},q=2{ESC}\\", f"{CSI}2J{CSI}H"]
     for index, chunk in enumerate(chunks):
         more = 1 if index < len(chunks) - 1 else 0
-        ctrl = f"a=T,f=32,s={width},v={height},i={IMAGE_ID},q=2" if index == 0 else f"i={IMAGE_ID},q=2"
+        ctrl = f"a=T,f=32,s={width},v={height},i={IMAGE_ID},q=2" if index == 0 else "q=2"
         out.append(f"{ESC}_G{ctrl},m={more};{chunk}{ESC}\\")
     sys.stdout.write("".join(out))
     sys.stdout.flush()

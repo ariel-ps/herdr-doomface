@@ -11,7 +11,7 @@ fi
 command -v jq >/dev/null 2>&1 || exit 0
 config="${HERDR_PLUGIN_CONFIG_DIR:-$root}"
 [[ -r "$config/config.sh" ]] && source "$config/config.sh"
-export HERDR_DOOMFACE_INTERVAL HERDR_DOOMFACE_COLS HERDR_DOOMFACE_ROWS HERDR_DOOMFACE_CORNER HERDR_DOOMFACE_Z
+export HERDR_DOOMFACE_INTERVAL
 [[ "${HERDR_DOOMFACE_OFF:-0}" == 1 ]] && exit 0
 
 pane=$(print -r -- "${HERDR_PLUGIN_EVENT_JSON:-}" | jq -r '.pane_id // empty' 2>/dev/null)

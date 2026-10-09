@@ -2,7 +2,7 @@ id = "dev.ariel.herdr-doomface"
 name = "Doom Indicators"
 version = "0.1.0"
 min_herdr_version = "0.9.3"
-description = "Claude context usage as a face overlay or widget."
+description = "Claude context usage as sidebar metadata or a bitmap widget."
 platforms = ["macos", "linux"]
 
 [[build]]

@@ -6,25 +6,25 @@ description = "Claude context usage as a face overlay or widget."
 platforms = ["macos", "linux"]
 
 [[build]]
-command = ["sh","-c","if command -v uv >/dev/null 2>&1; then uv run --no-project python scripts/fetch-doom-wad.py; else python3 scripts/fetch-doom-wad.py; fi || echo 'doomface: no frames cached, corner face stays off'"]
+command = ["sh", "./scripts/build/cache-doom-frames.sh"]
 
 [[events]]
 on = "pane.agent_status_changed"
-command = ["zsh","./doomface-hook.sh"]
+command = ["zsh", "./hooks/on-pane-agent-status-changed-doomface.zsh"]
 
 [[actions]]
 id = "doomface-stop-all"
 title = "Stop all doom faces"
-command = ["zsh","./doomface-hook.sh","--stop-all"]
+command = ["./libexec/herdr-doomface", "--stop-all"]
 
 [[actions]]
 id = "doomface-widget"
 title = "Open Doom face widget"
-command = ["zsh","./doomface-widget-action.sh"]
+command = ["zsh", "./actions/open-widget.zsh"]
 
 [[panes]]
 id = "doomface-widget"
 title = "Doom Face"
-platforms = ["macos","linux"]
+platforms = ["macos", "linux"]
 placement = "split"
-command = ["sh","-c","if command -v uv >/dev/null 2>&1; then exec uv run --no-project python ./bin/herdr-doomface-widget; else exec python3 ./bin/herdr-doomface-widget; fi"]
+command = ["./libexec/herdr-doomface-widget"]

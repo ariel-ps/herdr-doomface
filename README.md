@@ -2,7 +2,7 @@
 
 Show Claude's context usage as a Doom face overlay or a separate widget.
 
-The build downloads face assets. The overlay stops when the plugin is disabled (within its polling interval). Existing widget panes can be closed normally. Configure overlay position and size in `config.sh`. Transcript lookup respects `CLAUDE_CONFIG_DIR`.
+The build downloads face assets into the existing XDG cache location. The overlay stops when the plugin is disabled (within its polling interval). Existing widget panes can be closed normally. Configure overlay position and size in `config.sh`. Transcript lookup respects `CLAUDE_CONFIG_DIR`.
 
 ## Install
 
@@ -26,6 +26,18 @@ herdr plugin action invoke doomface-stop-all --plugin dev.ariel.herdr-doomface
 ```
 
 Workers exit at the next poll (normally 4 seconds apart). New agent events can start them again; disable the plugin to keep overlays off. Workers use kernel locks and stop requests, so stale PID files cannot cause an unrelated process to be terminated. Workers started by older versions exit when their pane closes or the plugin is disabled.
+
+## Development
+
+Herdr-facing event and action adapters live in `hooks/` and `actions/`. Private launchers live in `libexec/`, and the importable Python implementation lives in `src/herdr_doomface/`. Build-only asset tooling lives in `scripts/build/`.
+
+Run the contract and behavior tests directly:
+
+```sh
+python3 tests/test_plugin.py
+```
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes and [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
 ## License
 
